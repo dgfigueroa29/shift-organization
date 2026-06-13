@@ -1,0 +1,134 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main, 'release/*']
+  pull_request:
+    branches: [main, 'release/*']
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, staging, prod]
+        default: dev
+
+env:
+  JAVA_VERSION: "17"
+  GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.parallel=true
+  AWS_REGION: us-east-1
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: gradle
+
+      - name: Compile all modules
+        run: ./gradlew compileKotlin --no-daemon
+
+      - name: Run unit tests
+        run: ./gradlew test --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports-${{ github.sha }}
+          path: '**/build/reports/tests/'
+
+      - name: Build Lambda shadow JARs
+        run: ./gradlew shadowJar --no-daemon
+
+      - name: Stage deployment artifacts
+        run: |
+          mkdir -p .deploy/lambda-jars
+          for dir in lambda-*; do
+            if [ -d "$dir/build/libs" ]; then
+              cp "$dir/build/libs/"*.jar .deploy/lambda-jars/
+            fi
+          done
+          mkdir -p .deploy/iac
+          cp -r iac/sam .deploy/iac/sam
+          cp build.gradle.kts settings.gradle.kts gradlew gradlew.bat .deploy/
+          cp -r gradle .deploy/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deploy-artifacts-${{ github.sha }}
+          path: .deploy/
+
+  deploy:
+    name: Deploy
+    needs: build
+    if: >
+      github.ref == 'refs/heads/main'
+      || github.event_name == 'workflow_dispatch'
+      || startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || (startsWith(github.ref, 'refs/heads/release/') && 'staging' || 'dev') }}
+      cancel-in-progress: false
+
+    env:
+      DEPLOY_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (startsWith(github.ref, 'refs/heads/release/') && 'staging' || 'dev') }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: deploy-artifacts-${{ github.sha }}
+          path: .deploy/
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Restore JARs to expected paths
+        working-directory: .deploy
+        run: |
+          for module in properties bookings recurring-events notifications health recurring-processor; do
+            mkdir -p "lambda-$module/build/libs"
+            cp "lambda-jars/$module.jar" "lambda-$module/build/libs/"
+          done
+
+      - name: Validate SAM template
+        working-directory: .deploy/iac/sam
+        run: sam validate --template-file template.yaml
+
+      - name: Package artifacts to S3
+        working-directory: .deploy/iac/sam
+        run: |
+          sam package \
+            --template-file template.yaml \
+            --s3-bucket ${{ secrets.SAM_S3_BUCKET }} \
+            --output-template-file packaged.yaml
+
+      - name: Deploy CloudFormation stack
+        working-directory: .deploy/iac/sam
+        run: |
+          PARAMS=$(jq -r '.[] | "\(.ParameterKey)=\(.ParameterValue)"' \
+            "$(pwd)/parameters/${{ env.DEPLOY_ENV }}.json" | tr '\n' ' ')
+          sam deploy \
+            --template-file packaged.yaml \
+            --stack-name shift-organization-${{ env.DEPLOY_ENV }} \
+            --parameter-overrides $PARAMS \
+            --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+            --no-fail-on-empty-changeset

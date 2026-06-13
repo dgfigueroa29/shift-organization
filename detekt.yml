@@ -1,0 +1,14 @@
+# Minimal detekt configuration for version 1.23.6
+# Using default rule sets with some customization
+
+build:
+  maxIssues: 10
+  excludeCorrectable: false
+  excludeNoDebug: true
+
+# Disable specific rules that are too strict for this codebase
+# by setting their severity to 'ignore'
+# See https://detekt.dev/docs/rules/ for all available rules
+
+# For now, use empty config to just run default rules
+# This avoids config validation errors

@@ -1,0 +1,54 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "prod"
+  },
+  {
+    "ParameterKey": "VpcCIDR",
+    "ParameterValue": "10.2.0.0/16"
+  },
+  {
+    "ParameterKey": "RDSUsername",
+    "ParameterValue": "shiftadmin"
+  },
+  {
+    "ParameterKey": "RDSDBName",
+    "ParameterValue": "shiftorg"
+  },
+  {
+    "ParameterKey": "OpenSearchInstanceType",
+    "ParameterValue": "r6g.large.search"
+  },
+  {
+    "ParameterKey": "OpenSearchEBSVolumeGB",
+    "ParameterValue": "100"
+  },
+  {
+    "ParameterKey": "OpenSearchInstanceCount",
+    "ParameterValue": "3"
+  },
+  {
+    "ParameterKey": "OpenSearchDedicatedMasterEnabled",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "RDSMultiAZ",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "CognitoAdminCreateUserOnly",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "CognitoDomainPrefix",
+    "ParameterValue": "shift-org-prod"
+  },
+  {
+    "ParameterKey": "SESSubscriptionEmail",
+    "ParameterValue": "prod-alerts@shiftorg.com"
+  },
+  {
+    "ParameterKey": "SESSenderAddress",
+    "ParameterValue": "noreply@shiftorg.com"
+  }
+]

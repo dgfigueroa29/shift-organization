@@ -1,0 +1,15 @@
+[
+  {
+    "name": "org.postgresql.core.Utils",
+    "methods": [
+      { "name": "getStackTrace", "parameterTypes": [] }
+    ]
+  },
+  {
+    "name": "java.lang.Class",
+    "methods": [
+      { "name": "getDeclaredFields", "parameterTypes": [] },
+      { "name": "getDeclaredMethods", "parameterTypes": [] }
+    ]
+  }
+]

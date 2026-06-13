@@ -25,3 +25,38 @@ replay_pid*
 
 # Kotlin Gradle plugin data, see https://kotlinlang.org/docs/whatsnew20.html#new-directory-for-kotlin-data-in-gradle-projects
 .kotlin/
+
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+out/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local properties
+local.properties
+*.local
+
+# AWS SAM
+.aws-sam/
+packaged-*.yaml
+
+# GraalVM native
+native/
+
+/.claude
+.codex
+/.kiro

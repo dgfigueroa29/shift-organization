@@ -1,0 +1,791 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Shift Organization MVP - Serverless property management backend
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Tracing: Active
+    Runtime: provided.al2023
+    Handler: run.sh
+    Layers:
+      - !Sub arn:aws:lambda:${AWS::Region}:753240598075:layer:LambdaAdapterLayerX86:22
+    Environment:
+      Variables:
+        AWS_LAMBDA_EXEC_WRAPPER: /opt/bootstrap
+        AWS_LWA_ENABLE_COMPRESSION: "true"
+        SERVER_PORT: "8080"
+        DEPLOY_TARGET: AWS
+        IAC_PROVIDER: SAM
+        ENABLE_CW_METRICS: "true"
+        ENABLE_STRUCTURED_LOGGING: "true"
+        ENABLE_COMPRESSION: "true"
+        JWT_VALIDATE_AUD: "true"
+        JWT_VALIDATE_TOKEN_USE: "true"
+        FLYWAY_ON_STARTUP: "true"
+        LAZY_DB_INIT: "false"
+        AWS_XRAY_TRACING_NAME: !Sub shift-org-${Environment}
+    VpcConfig:
+      SecurityGroupIds:
+        - !Ref LambdaSecurityGroup
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+
+Conditions:
+  IsDedicatedMasterEnabled: !Equals [!Ref OpenSearchDedicatedMasterEnabled, "true"]
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+  VpcCIDR:
+    Type: String
+    Default: 10.0.0.0/16
+  RDSUsername:
+    Type: String
+    Default: shiftadmin
+  RDSDBName:
+    Type: String
+    Default: shiftorg
+  OpenSearchInstanceType:
+    Type: String
+    Default: t3.small.search
+  SESSubscriptionEmail:
+    Type: String
+    Default: placeholder@shiftorg.com
+    Description: Email subscribed to SNS notification topic
+  SESSenderAddress:
+    Type: String
+    Default: noreply@shiftorg.com
+    Description: Verified SES sender email address for notification emails
+  OpenSearchEBSVolumeGB:
+    Type: Number
+    Default: 20
+  OpenSearchInstanceCount:
+    Type: Number
+    Default: 1
+    Description: Number of OpenSearch data nodes (1 for dev, 2 for staging, 3 for prod)
+  OpenSearchDedicatedMasterEnabled:
+    Type: String
+    Default: false
+    AllowedValues: [true, false]
+    Description: Enable dedicated master nodes for OpenSearch (recommended for prod with 3+ nodes)
+  OpenSearchDedicatedMasterType:
+    Type: String
+    Default: t3.small.search
+    Description: OpenSearch dedicated master instance type (used when DedicatedMasterEnabled=true)
+  RDSMultiAZ:
+    Type: String
+    Default: false
+    AllowedValues: [true, false]
+    Description: Enable Multi-AZ for RDS (recommended for prod)
+  CognitoAdminCreateUserOnly:
+    Type: String
+    Default: false
+    AllowedValues: [true, false]
+    Description: Restrict Cognito user creation to admins only (recommended for prod)
+  CognitoDomainPrefix:
+    Type: String
+    Default: shift-org
+
+Resources:
+  ##############################################################################
+  # VPC
+  ##############################################################################
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub shift-organization-${Environment}
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCIDR, 4, 8]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCIDR, 4, 8]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [2, !Cidr [!Ref VpcCIDR, 4, 8]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [3, !Cidr [!Ref VpcCIDR, 4, 8]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  ##############################################################################
+  # Security Groups
+  ##############################################################################
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Lambda functions
+      VpcId: !Ref VPC
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for RDS instance
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+  OpenSearchSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for OpenSearch
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+  ##############################################################################
+  # API Gateway HTTP API
+  ##############################################################################
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      FailOnWarnings: true
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: true
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 100
+
+  ##############################################################################
+  # DynamoDB Tables
+  ##############################################################################
+  RecurringEventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub shift-org-${Environment}-recurring-events
+      AttributeDefinitions:
+        - AttributeName: propertyId
+          AttributeType: S
+        - AttributeName: eventId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: propertyId
+          KeyType: HASH
+        - AttributeName: eventId
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  WorkflowStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub shift-org-${Environment}-workflow-state
+      AttributeDefinitions:
+        - AttributeName: workflowId
+          AttributeType: S
+        - AttributeName: workflowType
+          AttributeType: S
+      KeySchema:
+        - AttributeName: workflowId
+          KeyType: HASH
+        - AttributeName: workflowType
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  ##############################################################################
+  # RDS PostgreSQL
+  ##############################################################################
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for Shift Organization RDS
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: postgres
+      EngineVersion: "16.3"
+      DBInstanceClass: db.t4g.micro
+      DBName: !Ref RDSDBName
+      MasterUsername: !Ref RDSUsername
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:shift-org-${Environment}-rds-password:SecretString:password}}"
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      PubliclyAccessible: false
+      StorageType: gp3
+      AllocatedStorage: 20
+      BackupRetentionPeriod: 7
+      MultiAZ: !Ref RDSMultiAZ
+      DeletionProtection: true
+      EnablePerformanceInsights: true
+
+  RDSSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub shift-org-${Environment}-rds-password
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username": "${RDSUsername}"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: "\"@/\\"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  ##############################################################################
+  # OpenSearch
+  ##############################################################################
+  OpenSearchMasterPassword:
+    Type: AWS::SecretsManager::Secret
+    Condition: IsDedicatedMasterEnabled
+    Properties:
+      Name: !Sub shift-org-${Environment}-opensearch-master-password
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "shiftorg-admin"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: "\"@/\\"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  OpenSearchDomain:
+    Type: AWS::OpenSearchService::Domain
+    Properties:
+      DomainName: !Sub shift-org-${Environment}
+      EngineVersion: OpenSearch_2.11
+      ClusterConfig:
+        InstanceType: !Ref OpenSearchInstanceType
+        InstanceCount: !Ref OpenSearchInstanceCount
+        DedicatedMasterEnabled: !Ref OpenSearchDedicatedMasterEnabled
+        DedicatedMasterType: !If [IsDedicatedMasterEnabled, !Ref OpenSearchDedicatedMasterType, !Ref AWS::NoValue]
+        DedicatedMasterCount: !If [IsDedicatedMasterEnabled, 3, !Ref AWS::NoValue]
+      EBSOptions:
+        EBSEnabled: true
+        VolumeType: gp3
+        VolumeSize: !Ref OpenSearchEBSVolumeGB
+      EncryptionAtRestOptions:
+        Enabled: true
+      NodeToNodeEncryptionOptions:
+        Enabled: true
+      AdvancedSecurityOptions:
+        Enabled: true
+        InternalUserDatabaseEnabled: true
+        MasterUserOptions:
+          MasterUserName: shiftorg-admin
+          MasterUserPassword: !Sub "{{resolve:secretsmanager:shift-org-${Environment}-opensearch-master-password:SecretString:password}}"
+      VPCOptions:
+        SecurityGroupIds:
+          - !Ref OpenSearchSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetA
+      AccessPolicies:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !GetAtt PropertiesFunctionRole.Arn
+            Action: es:*
+            Resource: !Sub arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/shift-org-${Environment}/*
+
+  ##############################################################################
+  # SNS Topic
+  ##############################################################################
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub shift-org-${Environment}-notifications
+      KmsMasterKeyId: alias/aws/sns
+
+  SESSenderAddressParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /shift-org/${Environment}/ses/sender-address
+      Type: String
+      Value: !Ref SESSenderAddress
+      Description: Verified SES email address for sending notifications
+
+  NotificationTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref NotificationTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref NotificationTopic
+
+  ##############################################################################
+  # Cognito User Pool
+  ##############################################################################
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub shift-org-${Environment}
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: !Ref CognitoAdminCreateUserOnly
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: true
+      Schema:
+        - Name: role
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+          StringAttributeConstraints:
+            MinLength: "4"
+            MaxLength: "10"
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub shift-org-${Environment}-client
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+
+  CognitoUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub ${CognitoDomainPrefix}-${Environment}
+      UserPoolId: !Ref CognitoUserPool
+
+  ##############################################################################
+  # Lambda Functions
+  ##############################################################################
+
+  # --- Properties Handler ---
+  PropertiesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub shift-org-${Environment}-properties
+      CodeUri: ../../lambda-properties/build/libs/properties.jar
+      MemorySize: 1024
+      Environment:
+        Variables:
+          RDS_JDBC_URL: !Sub jdbc:postgresql://${RDSInstance.Endpoint.Address}:${RDSInstance.Endpoint.Port}/${RDSDBName}
+          RDS_USERNAME: !Ref RDSUsername
+          RDS_PASSWORD: !Sub "{{resolve:secretsmanager:shift-org-${Environment}-rds-password:SecretString:password}}"
+          DYNAMO_TABLE_RECURRING_EVENTS: !Ref RecurringEventsTable
+          DYNAMO_TABLE_WORKFLOW_STATE: !Ref WorkflowStateTable
+          COGNITO_JWKS_URI: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}/.well-known/jwks.json
+          SNS_TOPIC_ARN: !Ref NotificationTopic
+          OPENSEARCH_ENDPOINT: !GetAtt OpenSearchDomain.DomainEndpoint
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /properties/{proxy+}
+            Method: ANY
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RecurringEventsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WorkflowStateTable
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt NotificationTopic.TopicName
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: es:ESHttp*
+              Resource: !Sub arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/shift-org-${Environment}/*
+        - VPCAccessPolicy: {}
+
+  # --- Bookings Handler ---
+  BookingsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub shift-org-${Environment}-bookings
+      CodeUri: ../../lambda-bookings/build/libs/bookings.jar
+      MemorySize: 1024
+      Environment:
+        Variables:
+          RDS_JDBC_URL: !Sub jdbc:postgresql://${RDSInstance.Endpoint.Address}:${RDSInstance.Endpoint.Port}/${RDSDBName}
+          RDS_USERNAME: !Ref RDSUsername
+          RDS_PASSWORD: !Sub "{{resolve:secretsmanager:shift-org-${Environment}-rds-password:SecretString:password}}"
+          DYNAMO_TABLE_RECURRING_EVENTS: !Ref RecurringEventsTable
+          DYNAMO_TABLE_WORKFLOW_STATE: !Ref WorkflowStateTable
+          COGNITO_JWKS_URI: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}/.well-known/jwks.json
+          SNS_TOPIC_ARN: !Ref NotificationTopic
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /bookings/{proxy+}
+            Method: ANY
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RecurringEventsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WorkflowStateTable
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt NotificationTopic.TopicName
+        - VPCAccessPolicy: {}
+
+  # --- Recurring Events Handler ---
+  RecurringEventsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub shift-org-${Environment}-recurring-events
+      CodeUri: ../../lambda-recurring-events/build/libs/recurring-events.jar
+      Environment:
+        Variables:
+          DYNAMO_TABLE_RECURRING_EVENTS: !Ref RecurringEventsTable
+          DYNAMO_TABLE_WORKFLOW_STATE: !Ref WorkflowStateTable
+          COGNITO_JWKS_URI: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}/.well-known/jwks.json
+          SNS_TOPIC_ARN: !Ref NotificationTopic
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /recurring-events/{proxy+}
+            Method: ANY
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RecurringEventsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WorkflowStateTable
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt NotificationTopic.TopicName
+        - VPCAccessPolicy: {}
+
+  # --- Notifications Handler (SNS subscriber) ---
+  NotificationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub shift-org-${Environment}-notifications
+      CodeUri: ../../lambda-notifications/build/libs/notifications.jar
+      Environment:
+        Variables:
+          COGNITO_JWKS_URI: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}/.well-known/jwks.json
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+          SNS_TOPIC_ARN: !Ref NotificationTopic
+          SES_SENDER_ADDRESS: !Sub "{{resolve:ssm:/shift-org/${Environment}/ses/sender-address}}"
+      Events:
+        SnsEvent:
+          Type: SNS
+          Properties:
+            Topic: !Ref NotificationTopic
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: "*"
+        - CognitoReadPolicy:
+            UserPoolId: !Ref CognitoUserPool
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt NotificationTopic.TopicName
+        - VPCAccessPolicy: {}
+
+  # --- Health Handler ---
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub shift-org-${Environment}-health
+      CodeUri: ../../lambda-health/build/libs/health.jar
+      Environment:
+        Variables:
+          RDS_JDBC_URL: !Sub jdbc:postgresql://${RDSInstance.Endpoint.Address}:${RDSInstance.Endpoint.Port}/${RDSDBName}
+          RDS_USERNAME: !Ref RDSUsername
+          RDS_PASSWORD: !Sub "{{resolve:secretsmanager:shift-org-${Environment}-rds-password:SecretString:password}}"
+          DYNAMO_TABLE_RECURRING_EVENTS: !Ref RecurringEventsTable
+          DYNAMO_TABLE_WORKFLOW_STATE: !Ref WorkflowStateTable
+          COGNITO_JWKS_URI: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}/.well-known/jwks.json
+          OPENSEARCH_ENDPOINT: !GetAtt OpenSearchDomain.DomainEndpoint
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /health
+            Method: GET
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref RecurringEventsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref WorkflowStateTable
+        - VPCAccessPolicy: {}
+
+  # --- Recurring Event Processor (EventBridge-triggered) ---
+  RecurringProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub shift-org-${Environment}-recurring-processor
+      CodeUri: ../../lambda-recurring-processor/build/libs/recurring-processor.jar
+      Environment:
+        Variables:
+          DYNAMO_TABLE_RECURRING_EVENTS: !Ref RecurringEventsTable
+          SNS_TOPIC_ARN: !Ref NotificationTopic
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RecurringEventsTable
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt NotificationTopic.TopicName
+        - VPCAccessPolicy: {}
+
+  ##############################################################################
+  # EventBridge Rules
+  ##############################################################################
+  RecurringEventsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub shift-org-${Environment}-recurring-processor
+      Description: Triggers recurring event processor every 5 minutes
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt RecurringProcessorFunction.Arn
+          Id: RecurringProcessorTarget
+
+  RecurringEventsRulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref RecurringProcessorFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt RecurringEventsRule.Arn
+
+  ##############################################################################
+  # SSM Parameters for cross-stack references
+  ##############################################################################
+  DynamoTableRecurringEventsParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /shift-org/${Environment}/dynamo/recurring-events-table
+      Type: String
+      Value: !Ref RecurringEventsTable
+
+  DynamoTableWorkflowStateParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /shift-org/${Environment}/dynamo/workflow-state-table
+      Type: String
+      Value: !Ref WorkflowStateTable
+
+  SnsTopicArnParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /shift-org/${Environment}/sns/notification-topic-arn
+      Type: String
+      Value: !Ref NotificationTopic
+
+  OpenSearchEndpointParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /shift-org/${Environment}/opensearch/endpoint
+      Type: String
+      Value: !GetAtt OpenSearchDomain.DomainEndpoint
+
+  CognitoUserPoolIdParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /shift-org/${Environment}/cognito/user-pool-id
+      Type: String
+      Value: !Ref CognitoUserPool
+
+  CognitoJwksUriParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /shift-org/${Environment}/cognito/jwks-uri
+      Type: String
+      Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}/.well-known/jwks.json
+
+  RDSJDBCUrlParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /shift-org/${Environment}/rds/jdbc-url
+      Type: String
+      Value: !Sub jdbc:postgresql://${RDSInstance.Endpoint.Address}:${RDSInstance.Endpoint.Port}/${RDSDBName}
+
+  ##############################################################################
+  # CloudWatch Alarms
+  ##############################################################################
+  BookingCreatedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub shift-org-${Environment}-booking-created
+      AlarmDescription: No bookings created in the last hour
+      Namespace: ShiftOrganization
+      MetricName: booking.created
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: LessThanOrEqualToThreshold
+      TreatMissingData: breaching
+
+  NotificationFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub shift-org-${Environment}-notification-failed
+      AlarmDescription: SES delivery failures detected
+      Namespace: ShiftOrganization
+      MetricName: notification.failed
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  ConflictDetectedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub shift-org-${Environment}-conflict-detected
+      AlarmDescription: High rate of booking conflicts detected
+      Namespace: ShiftOrganization
+      MetricName: conflict.detected
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  RecurringProcessorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub shift-org-${Environment}-recurring-processor-silent
+      AlarmDescription: No recurring events triggered in the last 10 minutes
+      Namespace: ShiftOrganization
+      MetricName: recurring-event.triggered
+      Statistic: Sum
+      Period: 600
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: LessThanOrEqualToThreshold
+      TreatMissingData: breaching
+
+  ##############################################################################
+  # Outputs
+  ##############################################################################
+Outputs:
+  HttpApiEndpoint:
+    Description: HTTP API endpoint URL
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+  RecurringEventsTableName:
+    Description: Recurring Events DynamoDB table name
+    Value: !Ref RecurringEventsTable
+  WorkflowStateTableName:
+    Description: Workflow State DynamoDB table name
+    Value: !Ref WorkflowStateTable
+  RDSJDBCUrl:
+    Description: RDS PostgreSQL connection URL
+    Value: !Sub jdbc:postgresql://${RDSInstance.Endpoint.Address}:${RDSInstance.Endpoint.Port}/${RDSDBName}
+  OpenSearchEndpoint:
+    Description: OpenSearch domain endpoint
+    Value: !GetAtt OpenSearchDomain.DomainEndpoint
+  SnsTopicArn:
+    Description: Notification SNS topic ARN
+    Value: !Ref NotificationTopic
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref CognitoUserPool
+  PropertiesFunctionArn:
+    Description: Properties Lambda function ARN
+    Value: !GetAtt PropertiesFunction.Arn
+  BookingsFunctionArn:
+    Description: Bookings Lambda function ARN
+    Value: !GetAtt BookingsFunction.Arn
+  RecurringEventsFunctionArn:
+    Description: Recurring Events Lambda function ARN
+    Value: !GetAtt RecurringEventsFunction.Arn
+  NotificationsFunctionArn:
+    Description: Notifications Lambda function ARN
+    Value: !GetAtt NotificationsFunction.Arn
+  HealthFunctionArn:
+    Description: Health Lambda function ARN
+    Value: !GetAtt HealthFunction.Arn
+  RecurringProcessorFunctionArn:
+    Description: Recurring Processor Lambda function ARN
+    Value: !GetAtt RecurringProcessorFunction.Arn

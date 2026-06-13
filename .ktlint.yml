@@ -1,0 +1,16 @@
+# ktlint configuration for Shift Organization
+# Uses standard ktlint rules with project-specific overrides
+
+# Exclude generated/build directories
+disabled_rules:
+  - "no-wildcard-imports"  # Allow wildcard imports for Ktor/Exposed
+  - "max-line-length"      # Handled by detekt
+
+# EditorConfig fallback
+indent_size: 4
+continuation_indent_size: 4
+
+# Custom rule sets
+# standard: enabled (default)
+# experimental: disabled
+# kotlinlang-style: enabled

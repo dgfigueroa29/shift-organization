@@ -1,0 +1,7 @@
+# IAM policy for CloudWatch PutMetricData
+# Required by CloudWatchMetricEmitter for KPI emission (Requirement 9.3)
+Statement:
+  - Effect: Allow
+    Action:
+      - cloudwatch:PutMetricData
+    Resource: "*"

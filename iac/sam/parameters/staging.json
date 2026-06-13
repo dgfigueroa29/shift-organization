@@ -1,0 +1,54 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "staging"
+  },
+  {
+    "ParameterKey": "VpcCIDR",
+    "ParameterValue": "10.1.0.0/16"
+  },
+  {
+    "ParameterKey": "RDSUsername",
+    "ParameterValue": "shiftadmin"
+  },
+  {
+    "ParameterKey": "RDSDBName",
+    "ParameterValue": "shiftorg"
+  },
+  {
+    "ParameterKey": "OpenSearchInstanceType",
+    "ParameterValue": "t3.medium.search"
+  },
+  {
+    "ParameterKey": "OpenSearchEBSVolumeGB",
+    "ParameterValue": "50"
+  },
+  {
+    "ParameterKey": "OpenSearchInstanceCount",
+    "ParameterValue": "2"
+  },
+  {
+    "ParameterKey": "OpenSearchDedicatedMasterEnabled",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "RDSMultiAZ",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "CognitoAdminCreateUserOnly",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "CognitoDomainPrefix",
+    "ParameterValue": "shift-org-staging"
+  },
+  {
+    "ParameterKey": "SESSubscriptionEmail",
+    "ParameterValue": "staging-alerts@shiftorg.com"
+  },
+  {
+    "ParameterKey": "SESSenderAddress",
+    "ParameterValue": "noreply@shiftorg.com"
+  }
+]

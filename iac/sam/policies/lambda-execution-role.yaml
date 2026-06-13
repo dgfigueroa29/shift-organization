@@ -1,0 +1,17 @@
+# Lambda execution role base policy
+# Grants minimal permissions for Lambda VPC execution and CloudWatch logging.
+# Applied to all Lambda functions via SAM policy templates or inline policies.
+Statement:
+  - Effect: Allow
+    Action:
+      - logs:CreateLogGroup
+      - logs:CreateLogStream
+      - logs:PutLogEvents
+    Resource: arn:aws:logs:*:*:*
+
+  - Effect: Allow
+    Action:
+      - ec2:CreateNetworkInterface
+      - ec2:DescribeNetworkInterfaces
+      - ec2:DeleteNetworkInterface
+    Resource: "*"

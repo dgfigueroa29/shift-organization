@@ -1,0 +1,107 @@
+[versions]
+kotlin = "2.3.21"
+ktor = "3.1.3"
+aws-sdk = "2.25.69"
+kotlinx-serialization = "1.11.0"
+kotlinx-coroutines = "1.10.2"
+exposed = "0.61.0"
+hikaricp = "6.3.0"
+flyway = "10.13.0"
+opensearch-client = "2.7.0"
+logback = "1.5.21"
+slf4j = "2.0.17"
+junit5 = "5.12.1"
+mockito = "5.17.0"
+mockito-kotlin = "5.4.0"
+testcontainers = "1.19.8"
+jqwik = "1.8.5"
+# kotest = "5.9.1"  // Unused — kept for reference if property-based testing is added
+shadow = "8.3.6"
+h2 = "2.2.224"
+gradle = "8.14.5"
+detekt = "1.23.6"
+ktlint = "1.2.0"
+pitest = "1.15.0"
+kover = "0.8.5"
+graalvm = "0.10.3"
+
+[libraries]
+# Kotlin
+kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlin" }
+
+# Auth0 JWKS (used by cognitoJwt plugin)
+jwks-rsa = { module = "com.auth0:jwks-rsa", version = "0.22.1" }
+
+# Ktor server
+ktor-server-core = { module = "io.ktor:ktor-server-core-jvm", version.ref = "ktor" }
+ktor-server-netty = { module = "io.ktor:ktor-server-netty-jvm", version.ref = "ktor" }
+ktor-server-content-negotiation = { module = "io.ktor:ktor-server-content-negotiation-jvm", version.ref = "ktor" }
+ktor-server-status-pages = { module = "io.ktor:ktor-server-status-pages-jvm", version.ref = "ktor" }
+ktor-server-auth = { module = "io.ktor:ktor-server-auth-jvm", version.ref = "ktor" }
+ktor-server-auth-jwt = { module = "io.ktor:ktor-server-auth-jwt-jvm", version.ref = "ktor" }
+ktor-server-call-logging = { module = "io.ktor:ktor-server-call-logging-jvm", version.ref = "ktor" }
+ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json-jvm", version.ref = "ktor" }
+ktor-server-test-host = { module = "io.ktor:ktor-server-test-host-jvm", version.ref = "ktor" }
+# ktor-server-aws = { module = "io.ktor:ktor-server-aws", version.ref = "ktor" }  // Not available for Ktor 3.x
+ktor-server-compression = { module = "io.ktor:ktor-server-compression", version.ref = "ktor" }
+
+# Kotlinx
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+
+# AWS SDK v2
+aws-dynamodb = { module = "software.amazon.awssdk:dynamodb-enhanced", version.ref = "aws-sdk" }
+aws-eventbridge = { module = "software.amazon.awssdk:eventbridge", version.ref = "aws-sdk" }
+aws-sns = { module = "software.amazon.awssdk:sns", version.ref = "aws-sdk" }
+aws-ses = { module = "software.amazon.awssdk:ses", version.ref = "aws-sdk" }
+aws-cognito = { module = "software.amazon.awssdk:cognitoidentityprovider", version.ref = "aws-sdk" }
+aws-cloudwatch = { module = "software.amazon.awssdk:cloudwatch", version.ref = "aws-sdk" }
+aws-apache-client = { module = "software.amazon.awssdk:apache-client", version.ref = "aws-sdk" }
+aws-xray-recorder-sdk-aws-sdk-v2 = { module = "com.amazonaws:aws-xray-recorder-sdk-aws-sdk-v2", version = "2.13.0" }
+aws-xray-recorder-sdk-apache-http = { module = "com.amazonaws:aws-xray-recorder-sdk-apache-http", version = "2.13.0" }
+
+# DB
+hikaricp = { module = "com.zaxxer:HikariCP", version.ref = "hikaricp" }
+exposed-core = { module = "org.jetbrains.exposed:exposed-core", version.ref = "exposed" }
+exposed-jdbc = { module = "org.jetbrains.exposed:exposed-jdbc", version.ref = "exposed" }
+exposed-dao = { module = "org.jetbrains.exposed:exposed-dao", version.ref = "exposed" }
+exposed-java-time = { module = "org.jetbrains.exposed:exposed-java-time", version.ref = "exposed" }
+flyway-core = { module = "org.flywaydb:flyway-core", version.ref = "flyway" }
+flyway-postgresql = { module = "org.flywaydb:flyway-database-postgresql", version.ref = "flyway" }
+postgresql = { module = "org.postgresql:postgresql", version = "42.7.7" }
+
+# Logging
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+
+# Testing
+junit5-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junit5" }
+junit5-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit5" }
+junit5-params = { module = "org.junit.jupiter:junit-jupiter-params", version.ref = "junit5" }
+junit5-launcher = { module = "org.junit.platform:junit-platform-launcher", version = "1.12.1" }
+mockito-core = { module = "org.mockito:mockito-core", version.ref = "mockito" }
+mockito-kotlin = { module = "org.mockito.kotlin:mockito-kotlin", version.ref = "mockito-kotlin" }
+testcontainers-core = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
+testcontainers-postgresql = { module = "org.testcontainers:postgresql", version.ref = "testcontainers" }
+testcontainers-localstack = { module = "org.testcontainers:localstack", version.ref = "testcontainers" }
+testcontainers-opensearch = { module = "org.opensearch:opensearch-testcontainers", version = "2.0.1" }
+testcontainers-junit5 = { module = "org.testcontainers:junit-jupiter", version.ref = "testcontainers" }
+jqwik = { module = "net.jqwik:jqwik", version.ref = "jqwik" }
+# kotest-property = { module = "io.kotest:kotest-property-jvm", version.ref = "kotest" }
+# kotest-runner-junit5 = { module = "io.kotest:kotest-runner-junit5-jvm", version.ref = "kotest" }
+h2 = { module = "com.h2database:h2", version.ref = "h2" }
+
+# Code quality
+detekt = { module = "io.gitlab.arturbosch.detekt:detekt-gradle-plugin", version.ref = "detekt" }
+pitest = { module = "com.github.szgrabowski:gradle-pitest-plugin", version.ref = "pitest" }
+kover = { module = "org.jetbrains.kotlinx:kover", version.ref = "kover" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }
+graalvm-native = { id = "org.graalvm.buildtools.native", version.ref = "graalvm" }
+detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
+# ktlint = { id = "org.jlleitschuh.gradle.ktlint", version = "1.2.0" }  # Not in Gradle Central Plugin Repository
+# pitest = { id = "com.github.szgrabowski.pitest", version.ref = "pitest" }  # Not in Gradle Central Plugin Repository
+# kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }  # Not in Gradle Central Plugin Repository
